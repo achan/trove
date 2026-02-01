@@ -85,8 +85,8 @@ erDiagram
 
     sync_logs {
         uuid id PK
-        uuid account_id FK
-        uuid user_id FK
+        uuid account_id FK "nullable"
+        uuid user_id FK "nullable"
         sync_type_enum sync_type
         sync_status_enum status
         integer posts_fetched
@@ -108,8 +108,8 @@ erDiagram
         uuid id PK
         ingestion_source_enum source
         platform_enum platform
-        uuid account_id FK
-        uuid user_id FK
+        uuid account_id FK "nullable"
+        uuid user_id FK "nullable"
         text event_type
         text external_id
         jsonb payload
@@ -127,10 +127,10 @@ erDiagram
 
     post_queue {
         uuid id PK
-        uuid ingestion_queue_id FK
+        uuid ingestion_queue_id FK "nullable"
         platform_enum platform
-        uuid account_id FK
-        uuid user_id FK
+        uuid account_id FK "nullable"
+        uuid user_id FK "nullable"
         text platform_post_id
         jsonb post_data
         queue_status_enum status
