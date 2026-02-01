@@ -1,0 +1,128 @@
+erDiagram
+    users ||--o{ connected_accounts : "has many"
+    users ||--o{ posts : "has many"
+    users ||--o{ media_downloads : "has many"
+    users ||--o{ sync_logs : "has many"
+    users ||--o{ ingested_items : "has many"
+    users ||--o{ ingested_posts : "has many"
+    connected_accounts ||--o{ posts : "has many"
+    connected_accounts ||--o{ sync_logs : "has many"
+    connected_accounts ||--o{ ingested_items : "has many"
+    connected_accounts ||--o{ ingested_posts : "has many"
+    ingested_items ||--o{ ingested_posts : "has many"
+    ingested_posts ||--o{ media_downloads : "has many"
+
+    users {
+        uuid id PK
+        text email UK
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    connected_accounts {
+        uuid id PK
+        uuid user_id FK
+        platform_enum platform
+        text platform_user_id
+        jsonb platform_profile
+        jsonb connection
+        timestamptz last_sync_at
+        boolean sync_enabled
+        account_status_enum status
+        text error_message
+        integer error_count
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    posts {
+        uuid id PK
+        uuid account_id FK
+        uuid user_id FK
+        platform_enum platform
+        text platform_post_id UK
+        content_type_enum content_type
+        text text_content
+        text html_content
+        timestamptz created_at_platform
+        timestamptz updated_at_platform
+        boolean published
+        boolean deleted_on_platform
+        tsvector search_vector
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    media_downloads {
+        uuid id PK
+        uuid ingested_post_id FK
+        uuid user_id FK
+        text original_url UK
+        download_status_enum status
+        integer attempts
+        text error
+        timestamptz last_attempt_at
+        timestamptz created_at
+    }
+
+    sync_logs {
+        uuid id PK
+        uuid account_id FK "nullable"
+        uuid user_id FK "nullable"
+        sync_type_enum sync_type
+        sync_status_enum status
+        integer posts_fetched
+        integer posts_created
+        integer posts_updated
+        integer posts_deleted
+        integer media_downloaded
+        integer media_failed
+        text error_message
+        jsonb error_details
+        timestamptz started_at
+        timestamptz completed_at
+        integer duration_ms
+        jsonb metadata
+        timestamptz created_at
+    }
+
+    ingested_items {
+        uuid id PK
+        ingestion_source_enum source
+        platform_enum platform
+        uuid account_id FK "nullable"
+        uuid user_id FK "nullable"
+        text event_type
+        text external_id
+        jsonb payload
+        processing_status_enum status
+        integer attempts
+        timestamptz received_at
+        timestamptz started_at
+        timestamptz completed_at
+        text error_message
+        jsonb error_details
+        timestamptz last_error_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    ingested_posts {
+        uuid id PK
+        uuid ingested_item_id FK "nullable"
+        platform_enum platform
+        uuid account_id FK "nullable"
+        uuid user_id FK "nullable"
+        text platform_post_id
+        jsonb post_data
+        processing_status_enum status
+        integer attempts
+        timestamptz received_at
+        timestamptz started_at
+        timestamptz completed_at
+        text error_message
+        jsonb error_details
+        timestamptz last_error_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
