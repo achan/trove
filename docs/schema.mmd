@@ -1,7 +1,7 @@
 erDiagram
     users ||--o{ connected_accounts : "has many"
     users ||--o{ posts : "has many"
-    users ||--o{ media_assets : "has many"
+    users ||--o{ media_downloads : "has many"
     users ||--o{ sync_logs : "has many"
     users ||--o{ ingested_items : "has many"
     users ||--o{ ingested_posts : "has many"
@@ -10,7 +10,7 @@ erDiagram
     connected_accounts ||--o{ ingested_items : "has many"
     connected_accounts ||--o{ ingested_posts : "has many"
     ingested_items ||--o{ ingested_posts : "has many"
-    posts ||--o{ media_assets : "has many"
+    ingested_posts ||--o{ media_downloads : "has many"
 
     users {
         uuid id PK
@@ -53,32 +53,16 @@ erDiagram
         timestamptz updated_at
     }
 
-    media_assets {
+    media_downloads {
         uuid id PK
-        uuid post_id FK
+        uuid ingested_post_id FK
         uuid user_id FK
-        media_type_enum media_type
-        text original_url
-        text storage_path
-        text storage_bucket
-        integer width
-        integer height
-        integer duration
-        decimal aspect_ratio
-        bigint file_size
-        text mime_type
-        text file_extension
-        text alt_text
-        text caption
-        integer position
-        download_status_enum download_status
-        integer download_attempts
-        timestamptz last_download_attempt
-        text download_error
-        text content_hash
-        jsonb metadata
+        text original_url UK
+        download_status_enum status
+        integer attempts
+        text error
+        timestamptz last_attempt_at
         timestamptz created_at
-        timestamptz updated_at
     }
 
     sync_logs {

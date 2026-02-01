@@ -9,10 +9,10 @@ This document provides a detailed specification of the PostgreSQL database schem
 users
   └─< connected_accounts (1:many)
        └─< posts (1:many)
-            └─< media_assets (1:many)
        └─< sync_logs (1:many)
        └─< ingested_items (1:many)
             └─< ingested_posts (1:many)
+                 └─< media_downloads (1:many)
        └─< ingested_posts (1:many)
 ```
 
@@ -191,19 +191,10 @@ CREATE TABLE posts (
 
 ---
 
-### `media_assets`
-Stores media files associated with posts.
+### `media_downloads`
+Tracks media download status. Storage path derived from URL hash at runtime.
 
 ```sql
-CREATE TYPE media_type_enum AS ENUM (
-  'image',
-  'video',
-  'audio',
-  'document',
-  'gif',
-  'map_image' -- For Strava maps
-);
-
 CREATE TYPE download_status_enum AS ENUM (
   'pending',
   'downloading',
@@ -212,81 +203,51 @@ CREATE TYPE download_status_enum AS ENUM (
   'unavailable'
 );
 
-CREATE TABLE media_assets (
+CREATE TABLE media_downloads (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, -- Denormalized
+  ingested_post_id UUID NOT NULL REFERENCES ingested_posts(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 
-  -- Media information
-  media_type media_type_enum NOT NULL,
-  original_url TEXT NOT NULL, -- URL from platform
-  storage_path TEXT, -- Path in Supabase Storage
-  storage_bucket TEXT DEFAULT 'media', -- Supabase Storage bucket
-
-  -- Dimensions
-  width INTEGER,
-  height INTEGER,
-  duration INTEGER, -- Seconds, for video/audio
-  aspect_ratio DECIMAL(10,6), -- Calculated
-
-  -- File info
-  file_size BIGINT, -- Bytes
-  mime_type TEXT,
-  file_extension TEXT,
-
-  -- Metadata
-  alt_text TEXT, -- Accessibility
-  caption TEXT, -- Platform-provided caption
-  position INTEGER DEFAULT 0, -- Order in carousel/album
+  -- Media identification
+  original_url TEXT NOT NULL,
 
   -- Download tracking
-  download_status download_status_enum DEFAULT 'pending',
-  download_attempts INTEGER DEFAULT 0,
-  last_download_attempt TIMESTAMPTZ,
-  download_error TEXT,
-
-  -- Content hash (for deduplication)
-  content_hash TEXT, -- SHA-256 of file
-
-  -- Platform metadata
-  metadata JSONB DEFAULT '{}',
-  -- Example: {thumbnail_url, variants[], encoding_status}
+  status download_status_enum DEFAULT 'pending',
+  attempts INTEGER DEFAULT 0,
+  error TEXT,
+  last_attempt_at TIMESTAMPTZ,
 
   -- Timestamps
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
   -- Constraints
-  CONSTRAINT valid_position CHECK (position >= 0),
-  CONSTRAINT valid_dimensions CHECK (width > 0 AND height > 0 OR width IS NULL),
-  CONSTRAINT valid_duration CHECK (duration >= 0 OR duration IS NULL)
+  CONSTRAINT unique_user_url UNIQUE (user_id, original_url),
+  CONSTRAINT valid_attempts CHECK (attempts >= 0)
 );
 ```
 
 **Indexes:**
 - `PRIMARY KEY` on `id`
-- `INDEX` on `post_id`
+- `UNIQUE` on `(user_id, original_url)` (natural deduplication)
+- `INDEX` on `ingested_post_id`
 - `INDEX` on `user_id`
-- `INDEX` on `(post_id, position)` (for ordered retrieval)
-- `INDEX` on `download_status` (for background jobs)
-- `INDEX` on `(download_status, download_attempts)` (for retry logic)
-- `INDEX` on `content_hash` (for deduplication)
-- `INDEX` on `storage_path` (for lookups)
+- `INDEX` on `status` (for background jobs)
+- `INDEX` on `(status, attempts)` (for retry logic)
 
 **RLS Policies:**
-- Users can read only their own media
+- Users can read only their own media downloads
 - Service role can insert/update (download jobs)
 
-**Triggers:**
-- Calculate `aspect_ratio` from width/height
-- Update `updated_at` timestamp
-- Denormalize `user_id` from `post_id`
+**Storage Path (computed at runtime):**
+```
+{user_id}/{platform}/{sha256(original_url)}.{ext}
+```
 
 **Notes:**
-- Large media stored in Supabase Storage
-- `storage_path` format: `{user_id}/{platform}/{post_id}/{filename}`
-- Consider CDN for serving media
-- `content_hash` enables deduplication across posts
+- Media metadata (dimensions, alt_text, etc.) available in `ingested_posts.post_data`
+- Storage path not stored in DB - derived from URL hash
+- Natural deduplication: same URL = same storage location
+- Platform-specific renderers use `post_data` for display info
 
 ---
 
@@ -518,7 +479,6 @@ CREATE TYPE account_status_enum AS ENUM ('active', 'error', 'disconnected', 'tok
 CREATE TYPE content_type_enum AS ENUM ('post', 'activity', 'story', 'reel', 'reply', 'repost', 'article');
 
 -- Media types
-CREATE TYPE media_type_enum AS ENUM ('image', 'video', 'audio', 'document', 'gif', 'map_image');
 
 -- Download statuses
 CREATE TYPE download_status_enum AS ENUM ('pending', 'downloading', 'downloaded', 'failed', 'unavailable');
@@ -574,11 +534,11 @@ CREATE POLICY "Users can read own posts"
   ON posts FOR SELECT
   USING (auth.uid() = user_id);
 
--- media_assets table
-ALTER TABLE media_assets ENABLE ROW LEVEL SECURITY;
+-- media_downloads table
+ALTER TABLE media_downloads ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Users can read own media"
-  ON media_assets FOR SELECT
+CREATE POLICY "Users can read own media downloads"
+  ON media_downloads FOR SELECT
   USING (auth.uid() = user_id);
 
 -- sync_logs table
@@ -722,7 +682,8 @@ SELECT
     'height', m.height
   )) AS media
 FROM posts p
-LEFT JOIN media_assets m ON m.post_id = p.id AND m.download_status = 'downloaded'
+LEFT JOIN media_downloads md ON md.ingested_post_id = ip.id AND md.status = 'downloaded'
+LEFT JOIN ingested_posts ip ON ip.platform = p.platform AND ip.platform_post_id = p.platform_post_id
 WHERE p.published = TRUE AND p.deleted_on_platform = FALSE
 GROUP BY p.id;
 
@@ -739,7 +700,7 @@ CREATE INDEX ON public_posts (created_at_platform DESC);
 ## Migration Strategy
 
 1. Create enums first
-2. Create tables in order: users, connected_accounts, posts, media_assets, sync_logs
+2. Create tables in order: users, connected_accounts, posts, ingested_items, ingested_posts, media_downloads, sync_logs
 3. Create indexes
 4. Enable RLS and create policies
 5. Create functions and triggers

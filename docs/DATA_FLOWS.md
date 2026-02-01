@@ -307,53 +307,44 @@ Client polls sync status
 ```
 [Post Created/Updated]
          ↓
-Extract media URLs from post data
+Extract media URLs from ingested_posts.post_data
          ↓
 FOR EACH media URL:
   ↓
-  INSERT INTO media_assets (
-    post_id,
+  INSERT INTO media_downloads (
+    ingested_post_id,
+    user_id,
     original_url,
-    download_status='pending'
+    status='pending'
   )
+  ON CONFLICT (user_id, original_url) DO NOTHING
          ↓
 [Background Job: download-media]
          ↓
-SELECT * FROM media_assets
-  WHERE download_status = 'pending'
-     OR (download_status = 'failed'
-         AND download_attempts < 3)
+SELECT * FROM media_downloads
+  WHERE status = 'pending'
+     OR (status = 'failed'
+         AND attempts < 3)
   ORDER BY created_at
   LIMIT 10
          ↓
 FOR EACH media:
   ↓
-  UPDATE download_status='downloading'
+  UPDATE status='downloading'
   ↓
   Fetch file from original_url
   ↓
-  Determine mime_type, file_size
-  ↓
-  Generate storage_path
-    {user_id}/{platform}/{post_id}/{uuid}.{ext}
+  Compute storage_path = {user_id}/{platform}/{sha256(original_url)}.{ext}
   ↓
   Upload to Supabase Storage
   ↓
-  Extract metadata (dimensions, duration)
-  ↓
-  Calculate content_hash
-  ↓
-  UPDATE media_assets
-    SET download_status='downloaded',
-        storage_path='{path}',
-        file_size={size},
-        width={w}, height={h},
-        content_hash={hash}
+  UPDATE media_downloads
+    SET status='downloaded'
   ↓
   If error:
-    UPDATE download_status='failed',
-           download_attempts = download_attempts + 1,
-           download_error={message}
+    UPDATE status='failed',
+           attempts = attempts + 1,
+           error={message}
 ```
 
 ### Media Download with Retry Logic
@@ -364,7 +355,7 @@ WHILE attempt <= 3:
   ↓
   TRY:
     Download file
-    Upload to storage
+    Upload to storage (path derived from URL hash)
     Update record
     BREAK
   ↓
@@ -376,23 +367,16 @@ WHILE attempt <= 3:
       attempt++
 ```
 
-### Deduplication Check
+### Natural Deduplication
 
 ```
-Before uploading:
+Storage path = sha256(original_url)
   ↓
-Calculate content_hash of downloaded file
+Same URL always maps to same storage location
   ↓
-SELECT storage_path FROM media_assets
-  WHERE content_hash = {hash}
-    AND download_status = 'downloaded'
-  LIMIT 1
+No explicit dedup check needed
   ↓
-IF exists:
-  Use existing storage_path (saves storage)
-  UPDATE current media_asset with same path
-ELSE:
-  Upload new file
+Unique constraint on (user_id, original_url) prevents duplicate records
 ```
 
 ---
@@ -462,55 +446,49 @@ Parse query parameters
          ↓
 Build SQL query with filters
          ↓
-SELECT p.*,
-       json_agg(m.*) as media
+SELECT p.*, ip.post_data
 FROM posts p
-LEFT JOIN media_assets m ON m.post_id = p.id
+JOIN ingested_posts ip ON ip.platform = p.platform
+  AND ip.platform_post_id = p.platform_post_id
 WHERE p.user_id = {authenticated_user}
   AND p.platform = ANY({platforms})
   AND p.published = true
   AND p.deleted_on_platform = false
-  AND m.download_status = 'downloaded'
 ORDER BY p.created_at_platform DESC
 LIMIT {limit} OFFSET {offset}
          ↓
 Transform to API response format
          ↓
-Add signed URLs for media
+Extract media URLs from post_data
+         ↓
+Compute storage paths, generate signed URLs for downloaded media
          ↓
 Return JSON response
 ```
 
-### 7.2 Media Proxy Request
+### 7.2 Media URL Resolution
 
 ```
-[Client] → GET /api/media/{media_id}
+[Renderer] receives post + ingested_posts.post_data
          ↓
-[Edge Function: api-media]
+Extract media URL from post_data
          ↓
-Validate auth token
+Compute storage_path = {user_id}/{platform}/{sha256(url)}.{ext}
          ↓
-SELECT storage_path, mime_type, user_id
-FROM media_assets
-WHERE id = {media_id}
+Check if file exists in storage
          ↓
-Check RLS: user_id matches authenticated user
-         ↓
-Generate signed URL from Supabase Storage
-  OR
-Stream file directly
-         ↓
-Set appropriate headers:
-  Content-Type: {mime_type}
-  Cache-Control: public, max-age=31536000
-         ↓
-Return file / redirect
+IF exists:
+  Generate signed URL for local copy
+ELSE:
+  Return original platform URL
 ```
 
 ### 7.3 Signed URL Generation
 
 ```
-For each media asset in response:
+For each media URL in post_data:
+  ↓
+Compute storage_path from URL hash
   ↓
 supabase.storage
   .from('media')
@@ -564,25 +542,25 @@ CASE error_type:
 ```
 [Media download fails]
          ↓
-UPDATE media_assets
-  SET download_attempts = download_attempts + 1,
-      download_error = {message},
-      last_download_attempt = NOW()
+UPDATE media_downloads
+  SET attempts = attempts + 1,
+      error = {message},
+      last_attempt_at = NOW()
          ↓
-IF download_attempts < 3:
+IF attempts < 3:
   Keep status = 'pending' or 'failed'
   Will retry in next job run
          ↓
-IF download_attempts >= 3:
+IF attempts >= 3:
   ↓
   CASE error_type:
     ↓
     WHEN '404' OR '410':
-      UPDATE download_status = 'unavailable'
+      UPDATE status = 'unavailable'
       (Media deleted/expired on platform)
     ↓
     DEFAULT:
-      UPDATE download_status = 'failed'
+      UPDATE status = 'failed'
       Log for manual review
 ```
 
@@ -621,9 +599,9 @@ RETURNING id, platform_post_id
          ↓
 Map returned IDs to original data
          ↓
-Extract all media URLs
+Extract all media URLs from post_data
          ↓
-Batch INSERT media_assets
+Batch INSERT media_downloads
 ```
 
 ### 9.2 Parallel Processing
@@ -701,7 +679,7 @@ BEGIN TRANSACTION;
     ↓
     UPSERT posts
     ↓
-    INSERT media_assets
+    INSERT media_downloads (from post_data URLs)
     ↓
     UPDATE connected_accounts (last_sync_at)
     ↓
@@ -787,8 +765,8 @@ Check account health:
          ↓
 Check media download queue:
   ↓
-  SELECT COUNT(*) FROM media_assets
-    WHERE download_status = 'pending'
+  SELECT COUNT(*) FROM media_downloads
+    WHERE status = 'pending'
       AND created_at < NOW() - interval '1 hour'
          ↓
   IF count > threshold:

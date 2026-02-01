@@ -17,16 +17,6 @@ CREATE TYPE content_type_enum AS ENUM (
   'article'    -- Long-form content
 )
 
--- Media types
-CREATE TYPE media_type_enum AS ENUM (
-  'image',
-  'video',
-  'audio',
-  'document',
-  'gif',
-  'map_image' -- For Strava maps
-)
-
 -- Download statuses
 CREATE TYPE download_status_enum AS ENUM (
   'pending',

@@ -44,28 +44,6 @@ BEGIN
 END
 $$ LANGUAGE plpgsql
 
--- Function: Denormalize user_id in media_assets
-CREATE OR REPLACE FUNCTION denormalize_media_user_id()
-RETURNS TRIGGER AS $$
-BEGIN
-  SELECT user_id INTO NEW.user_id
-  FROM posts
-  WHERE id = NEW.post_id
-  RETURN NEW
-END
-$$ LANGUAGE plpgsql
-
--- Function: Calculate aspect ratio
-CREATE OR REPLACE FUNCTION calculate_aspect_ratio()
-RETURNS TRIGGER AS $$
-BEGIN
-  IF NEW.width IS NOT NULL AND NEW.height IS NOT NULL AND NEW.height > 0 THEN
-    NEW.aspect_ratio = NEW.width::DECIMAL / NEW.height::DECIMAL
-  END IF
-  RETURN NEW
-END
-$$ LANGUAGE plpgsql
-
 -- Function: Calculate sync duration
 CREATE OR REPLACE FUNCTION calculate_sync_duration()
 RETURNS TRIGGER AS $$
@@ -99,19 +77,6 @@ CREATE TRIGGER update_posts_search_vector
 CREATE TRIGGER denormalize_posts_user_id
   BEFORE INSERT ON posts
   FOR EACH ROW EXECUTE FUNCTION denormalize_post_user_id()
-
--- Triggers for media_assets table
-CREATE TRIGGER update_media_assets_updated_at
-  BEFORE UPDATE ON media_assets
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at()
-
-CREATE TRIGGER denormalize_media_assets_user_id
-  BEFORE INSERT ON media_assets
-  FOR EACH ROW EXECUTE FUNCTION denormalize_media_user_id()
-
-CREATE TRIGGER calculate_media_aspect_ratio
-  BEFORE INSERT OR UPDATE OF width, height ON media_assets
-  FOR EACH ROW EXECUTE FUNCTION calculate_aspect_ratio()
 
 -- Triggers for sync_logs table
 CREATE TRIGGER calculate_sync_logs_duration

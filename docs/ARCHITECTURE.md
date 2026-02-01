@@ -12,7 +12,7 @@ your archived data.
 All incoming data flows through a two-stage ingestion architecture that decouples raw data capture from processing:
 
 ```
-External Platform → ingested_items → ingested_posts → Database (posts, media_assets)
+External Platform → ingested_items → ingested_posts → Database (posts, media_downloads)
 ```
 
 **Benefits:**
@@ -26,8 +26,7 @@ External Platform → ingested_items → ingested_posts → Database (posts, med
 Data is stored in a normalized schema with platform-specific details in JSONB columns:
 - `connected_accounts.platform_profile` - Profile info
 - `connected_accounts.connection` - Auth & webhook details
-- `ingested_posts.post_data` - Raw platform-specific post data (permanent archive)
-- `media_assets.metadata` - Platform-specific media data
+- `ingested_posts.post_data` - Raw platform-specific post data (permanent archive, includes media URLs)
 
 ### 3. Multi-Tenant Isolation
 Row Level Security (RLS) on all tables ensures users can only access their own data, with
@@ -41,7 +40,7 @@ service role bypassing RLS for background processing.
 - **users** - Trove user accounts
 - **connected_accounts** - OAuth connections to platforms
 - **posts** - Archived social media posts/activities
-- **media_assets** - Downloaded media files
+- **media_downloads** - Media download tracking (storage path derived from URL hash)
 - **sync_logs** - Sync operation audit trail
 
 #### Ingestion Tables
@@ -82,7 +81,7 @@ See [schema.mmd](schema.mmd) for visual diagram.
 1. Worker picks up pending post
 2. Parse `post_data` JSONB
 3. Create/update `posts` record (normalized fields only)
-4. Queue media downloads in `media_assets`
+4. Extract media URLs and queue in `media_downloads`
 5. Mark post as completed
 
 **Fields:**
@@ -226,11 +225,11 @@ ORDER BY last_sync_at NULLS FIRST
    - Marks item complete
 5. Post worker processes:
    - Creates posts record (normalized fields)
-   - Creates media_assets records for photos
+   - Extracts media URLs, creates media_downloads records
    - Marks ingested_posts complete
 6. Media download worker:
-   - Downloads each photo
-   - Updates media_assets records
+   - Downloads each URL to storage (path = hash of URL)
+   - Updates media_downloads status
 ```
 
 ### Polling Flow (Instagram)
@@ -284,24 +283,17 @@ ORDER BY last_sync_at NULLS FIRST
 ```
 media/
   {user_id}/
-    bluesky/
-      {post_id}/
-        image1.jpg
-        image2.jpg
-    strava/
-      {post_id}/
-        activity_photo.jpg
-        map.png
-    instagram/
-      {post_id}/
-        post_image.jpg
+    {platform}/
+      {sha256(original_url)}.jpg
+      {sha256(original_url)}.mp4
 ```
 
 **Configuration:**
 - Size limit: 50MB per file
 - Allowed types: image/*, video/*, audio/*
 - RLS: Users can only access their own files
-- Path format: `{user_id}/{platform}/{post_id}/{filename}`
+- Path format: `{user_id}/{platform}/{sha256(original_url)}.{ext}`
+- Storage path derived at download time from URL hash (not stored in DB)
 
 ## Performance Considerations
 
@@ -313,7 +305,6 @@ media/
 
 ### Denormalization
 - `posts.user_id` - Denormalized from connected_accounts for performance
-- `media_assets.user_id` - Denormalized from posts for performance
 - Maintained via database triggers
 
 ### Caching Strategy
