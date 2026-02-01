@@ -77,7 +77,6 @@ Trove automatically syncs your social media posts, activities, and media from pl
 ### Technical Documentation
 - [**docs/ARCHITECTURE.md**](docs/ARCHITECTURE.md) - System architecture and design decisions
 - [**docs/schema.mmd**](docs/schema.mmd) - Visual database schema diagram (Mermaid)
-- [**docs/DATABASE_SCHEMA.md**](docs/DATABASE_SCHEMA.md) - Complete database schema with tables, relationships, indexes, and RLS policies
 - [**docs/DATA_FLOWS.md**](docs/DATA_FLOWS.md) - Detailed data flow diagrams for all system processes
 - [**docs/API_SPECIFICATION.md**](docs/API_SPECIFICATION.md) - Full REST API documentation with examples
 - [**docs/SECURITY_PRIVACY.md**](docs/SECURITY_PRIVACY.md) - Security architecture and privacy compliance
