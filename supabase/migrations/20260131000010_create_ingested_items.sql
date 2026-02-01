@@ -1,4 +1,4 @@
--- Create ingestion queue for webhooks and fetches
+-- Create ingested_items table for archived webhook/fetch payloads
 
 -- Ingestion source types
 CREATE TYPE ingestion_source_enum AS ENUM (
@@ -8,16 +8,16 @@ CREATE TYPE ingestion_source_enum AS ENUM (
   'retry'         -- Retry of failed operation
 )
 
--- Queue processing status
-CREATE TYPE queue_status_enum AS ENUM (
+-- Processing status
+CREATE TYPE processing_status_enum AS ENUM (
   'pending',      -- Waiting to be processed
   'processing',   -- Currently being processed
   'completed',    -- Successfully processed
   'failed',       -- Processing failed
-  'dead_letter'   -- Moved to dead letter queue after max retries
+  'dead_letter'   -- Moved to dead letter after max retries
 )
 
-CREATE TABLE ingestion_queue (
+CREATE TABLE ingested_items (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
   -- Source information
@@ -34,7 +34,7 @@ CREATE TABLE ingestion_queue (
   payload JSONB NOT NULL,
 
   -- Processing tracking
-  status queue_status_enum DEFAULT 'pending',
+  status processing_status_enum DEFAULT 'pending',
   attempts INTEGER DEFAULT 0,
 
   -- Timing
@@ -55,29 +55,29 @@ CREATE TABLE ingestion_queue (
   CONSTRAINT valid_attempts CHECK (attempts >= 0)
 )
 
--- Indexes for ingestion queue
-CREATE INDEX idx_ingestion_queue_status ON ingestion_queue(status)
-CREATE INDEX idx_ingestion_queue_platform ON ingestion_queue(platform)
-CREATE INDEX idx_ingestion_queue_account_id ON ingestion_queue(account_id)
-CREATE INDEX idx_ingestion_queue_user_id ON ingestion_queue(user_id)
-CREATE INDEX idx_ingestion_queue_source ON ingestion_queue(source)
-CREATE INDEX idx_ingestion_queue_received_at ON ingestion_queue(received_at DESC)
-CREATE INDEX idx_ingestion_queue_payload ON ingestion_queue USING GIN(payload)
-CREATE INDEX idx_ingestion_queue_external_id ON ingestion_queue(platform, external_id) WHERE external_id IS NOT NULL
+-- Indexes for ingested_items
+CREATE INDEX idx_ingested_items_status ON ingested_items(status)
+CREATE INDEX idx_ingested_items_platform ON ingested_items(platform)
+CREATE INDEX idx_ingested_items_account_id ON ingested_items(account_id)
+CREATE INDEX idx_ingested_items_user_id ON ingested_items(user_id)
+CREATE INDEX idx_ingested_items_source ON ingested_items(source)
+CREATE INDEX idx_ingested_items_received_at ON ingested_items(received_at DESC)
+CREATE INDEX idx_ingested_items_payload ON ingested_items USING GIN(payload)
+CREATE INDEX idx_ingested_items_external_id ON ingested_items(platform, external_id) WHERE external_id IS NOT NULL
 
 -- Trigger for updated_at
-CREATE TRIGGER update_ingestion_queue_updated_at
-  BEFORE UPDATE ON ingestion_queue
+CREATE TRIGGER update_ingested_items_updated_at
+  BEFORE UPDATE ON ingested_items
   FOR EACH ROW EXECUTE FUNCTION update_updated_at()
 
 -- Enable RLS
-ALTER TABLE ingestion_queue ENABLE ROW LEVEL SECURITY
+ALTER TABLE ingested_items ENABLE ROW LEVEL SECURITY
 
 -- RLS Policies
-CREATE POLICY "Users can read own queue items"
-  ON ingestion_queue FOR SELECT
+CREATE POLICY "Users can read own ingested items"
+  ON ingested_items FOR SELECT
   USING (auth.uid() = user_id)
 
-CREATE POLICY "Service role can manage queue"
-  ON ingestion_queue FOR ALL
+CREATE POLICY "Service role can manage ingested items"
+  ON ingested_items FOR ALL
   USING (auth.role() = 'service_role')

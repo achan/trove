@@ -11,6 +11,9 @@ users
        └─< posts (1:many)
             └─< media_assets (1:many)
        └─< sync_logs (1:many)
+       └─< ingested_items (1:many)
+            └─< ingested_posts (1:many)
+       └─< ingested_posts (1:many)
 ```
 
 ## Tables
@@ -114,7 +117,7 @@ CREATE TABLE connected_accounts (
 ---
 
 ### `posts`
-Stores social media posts/activities from all platforms.
+Stores normalized social media posts/activities from all platforms.
 
 ```sql
 CREATE TYPE content_type_enum AS ENUM (
@@ -149,18 +152,8 @@ CREATE TABLE posts (
   published BOOLEAN DEFAULT TRUE,
   deleted_on_platform BOOLEAN DEFAULT FALSE,
 
-  -- Engagement (snapshot at time of sync)
-  engagement_stats JSONB DEFAULT '{}',
-  -- Example: {"likes": 42, "comments": 5, "shares": 2, "views": 1000}
-
-  -- Platform-specific metadata
-  metadata JSONB DEFAULT '{}',
-  -- Bluesky: {author_did, author_handle, uri, reply_parent, reply_root}
-  -- Strava: {activity_type, sport_type, distance, duration, elevation, stats}
-  -- Instagram: {permalink, product_type, is_carousel}
-
   -- Search
-  search_vector TSVECTOR, -- Full-text search
+  search_vector TSVECTOR, -- Full-text search (populated from ingested_posts.post_data)
 
   -- Timestamps
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -179,8 +172,6 @@ CREATE TABLE posts (
 - `INDEX` on `(user_id, created_at_platform DESC)` (main query pattern)
 - `INDEX` on `(user_id, platform, created_at_platform DESC)`
 - `INDEX` on `deleted_on_platform` (to filter out)
-- `GIN INDEX` on `engagement_stats` (for JSONB queries)
-- `GIN INDEX` on `metadata` (for JSONB queries)
 - `GIN INDEX` on `search_vector` (for full-text search)
 
 **RLS Policies:**
@@ -189,13 +180,13 @@ CREATE TABLE posts (
 - Users cannot directly insert/update posts (done via sync)
 
 **Triggers:**
-- Update `search_vector` on insert/update
+- Update `search_vector` on insert/update (queries `ingested_posts.post_data` for platform-specific fields)
 - Update `updated_at` timestamp
 - Denormalize `user_id` from `account_id` on insert
 
 **Notes:**
-- `engagement_stats` updated on each sync (historical tracking in separate table if needed)
-- `metadata` highly platform-specific - see platform docs
+- Platform-specific metadata (engagement, activity stats, etc.) stored in `ingested_posts.post_data`
+- Query via JOIN with `ingested_posts` for full data
 - Consider partitioning by `created_at_platform` for large datasets
 
 ---
@@ -376,6 +367,126 @@ CREATE TABLE sync_logs (
 
 ---
 
+### `ingested_items`
+Permanent archive of raw webhook/fetch payloads from platforms.
+
+```sql
+CREATE TYPE ingestion_source_enum AS ENUM (
+  'webhook',      -- Incoming webhook from platform
+  'fetch',        -- Scheduled/manual fetch
+  'backfill',     -- Initial backfill operation
+  'retry'         -- Retry of failed operation
+);
+
+CREATE TYPE processing_status_enum AS ENUM (
+  'pending',      -- Waiting to be processed
+  'processing',   -- Currently being processed
+  'completed',    -- Successfully processed
+  'failed',       -- Processing failed
+  'dead_letter'   -- Moved to dead letter after max retries
+);
+
+CREATE TABLE ingested_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  source ingestion_source_enum NOT NULL,
+  platform platform_enum NOT NULL,
+  account_id UUID REFERENCES connected_accounts(id) ON DELETE SET NULL,
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+
+  -- Event identification
+  event_type TEXT NOT NULL,
+  external_id TEXT, -- Platform's event/webhook ID
+
+  -- Complete payload
+  payload JSONB NOT NULL,
+
+  -- Processing tracking
+  status processing_status_enum DEFAULT 'pending',
+  attempts INTEGER DEFAULT 0,
+
+  -- Timing
+  received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+
+  -- Error tracking
+  error_message TEXT,
+  error_details JSONB,
+  last_error_at TIMESTAMPTZ,
+
+  -- Timestamps
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+**Indexes:**
+- `INDEX` on `status` (for processing)
+- `INDEX` on `platform`
+- `INDEX` on `account_id`, `user_id`
+- `INDEX` on `received_at DESC`
+- `GIN INDEX` on `payload`
+- `INDEX` on `(platform, external_id)` for deduplication
+
+**Notes:**
+- Retained permanently as audit trail and raw data archive
+- Enables reprocessing with updated normalization logic
+
+---
+
+### `ingested_posts`
+Permanent archive of individual posts with raw platform data.
+
+```sql
+CREATE TABLE ingested_posts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  ingested_item_id UUID REFERENCES ingested_items(id) ON DELETE SET NULL,
+
+  -- Platform information
+  platform platform_enum NOT NULL,
+  account_id UUID REFERENCES connected_accounts(id) ON DELETE SET NULL,
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+
+  -- Post identification
+  platform_post_id TEXT NOT NULL,
+
+  -- Post data in native format (permanent archive)
+  post_data JSONB NOT NULL,
+
+  -- Processing tracking
+  status processing_status_enum DEFAULT 'pending',
+  attempts INTEGER DEFAULT 0,
+
+  -- Timing
+  received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+
+  -- Error tracking
+  error_message TEXT,
+  error_details JSONB,
+  last_error_at TIMESTAMPTZ,
+
+  -- Timestamps
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+**Indexes:**
+- `INDEX` on `status` (for processing)
+- `INDEX` on `(platform, platform_post_id)` (for lookups from posts)
+- `INDEX` on `account_id`, `user_id`
+- `INDEX` on `received_at DESC`
+- `GIN INDEX` on `post_data` (for querying platform-specific fields)
+
+**Notes:**
+- Contains full platform-specific data: engagement stats, metadata, activity details
+- Query via JOIN with `posts` table for combined data
+- Retained permanently - no deletion policy
+
+---
+
 ## Additional Tables (Future)
 
 ### `engagement_history`
@@ -389,22 +500,6 @@ CREATE TABLE engagement_history (
   recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
   CONSTRAINT unique_post_recording UNIQUE (post_id, recorded_at)
-);
-```
-
-### `webhooks_queue`
-Queue for processing webhook events
-
-```sql
-CREATE TABLE webhooks_queue (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  platform platform_enum NOT NULL,
-  event_type TEXT NOT NULL,
-  payload JSONB NOT NULL,
-  processed BOOLEAN DEFAULT FALSE,
-  processed_at TIMESTAMPTZ,
-  error TEXT,
-  received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
 
@@ -433,6 +528,12 @@ CREATE TYPE sync_type_enum AS ENUM ('webhook', 'manual', 'scheduled', 'backfill'
 
 -- Sync statuses
 CREATE TYPE sync_status_enum AS ENUM ('running', 'success', 'partial', 'failed', 'cancelled');
+
+-- Ingestion source types
+CREATE TYPE ingestion_source_enum AS ENUM ('webhook', 'fetch', 'backfill', 'retry');
+
+-- Processing statuses (for ingested_items and ingested_posts)
+CREATE TYPE processing_status_enum AS ENUM ('pending', 'processing', 'completed', 'failed', 'dead_letter');
 ```
 
 ---
@@ -512,20 +613,31 @@ CREATE TRIGGER update_users_updated_at
 
 ### Update Search Vector
 ```sql
+-- Queries ingested_posts for platform-specific fields (author_handle, activity_type)
 CREATE OR REPLACE FUNCTION update_search_vector()
 RETURNS TRIGGER AS $$
+DECLARE
+  post_data JSONB;
 BEGIN
+  -- Look up the raw post data from ingested_posts
+  SELECT ip.post_data INTO post_data
+  FROM ingested_posts ip
+  WHERE ip.platform = NEW.platform
+    AND ip.platform_post_id = NEW.platform_post_id
+  ORDER BY ip.created_at DESC
+  LIMIT 1;
+
   NEW.search_vector = to_tsvector('english',
     COALESCE(NEW.text_content, '') || ' ' ||
-    COALESCE(NEW.metadata->>'author_handle', '') || ' ' ||
-    COALESCE(NEW.metadata->>'activity_type', '')
+    COALESCE(post_data->>'author_handle', '') || ' ' ||
+    COALESCE(post_data->>'activity_type', '')
   );
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER update_posts_search_vector
-  BEFORE INSERT OR UPDATE OF text_content, metadata ON posts
+  BEFORE INSERT OR UPDATE OF text_content ON posts
   FOR EACH ROW EXECUTE FUNCTION update_search_vector();
 ```
 

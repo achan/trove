@@ -182,34 +182,40 @@ Subscription active
 ```
 Receive webhook event
   ↓
-INSERT INTO webhooks_queue (platform, event_type, payload)
+INSERT INTO ingested_items (platform, event_type, payload, source='webhook')
   ↓
 Return 200 OK immediately
   ↓
 --- Background Processing ---
   ↓
-SELECT * FROM webhooks_queue WHERE processed = false
+SELECT * FROM ingested_items WHERE status = 'pending'
   ↓
-FOR EACH event:
+FOR EACH item:
   ↓
   Parse platform, object_id, owner_id
   ↓
   SELECT * FROM connected_accounts
-    WHERE platform = event.platform
-      AND platform_user_id = event.owner_id
+    WHERE platform = item.platform
+      AND platform_user_id = item.owner_id
   ↓
   Check token expiration
   ↓
   If expired: refresh_token()
   ↓
-  Fetch data from platform API
+  Fetch full data from platform API
     (e.g., GET /activities/{object_id})
   ↓
-  UPSERT INTO posts
+  INSERT INTO ingested_posts (post_data, platform_post_id, ...)
+  ↓
+  UPDATE ingested_items SET status = 'completed'
+  ↓
+--- Post Processing ---
+  ↓
+  UPSERT INTO posts (normalized fields only)
   ↓
   Queue media downloads
   ↓
-  UPDATE webhooks_queue SET processed = true
+  UPDATE ingested_posts SET status = 'completed'
 ```
 
 ### 4.2 Scheduled Polling Sync
@@ -261,9 +267,11 @@ FOR EACH post in results:
     SELECT id FROM posts WHERE platform_post_id = {uri}
   ↓
   If exists:
-    UPDATE posts (engagement_stats, updated_at_platform)
+    UPDATE posts (updated_at_platform)
+    UPDATE ingested_posts (post_data with latest engagement)
   If new:
-    INSERT INTO posts (...)
+    INSERT INTO ingested_posts (post_data, ...)
+    INSERT INTO posts (normalized fields)
     Extract media from post.embed
     Queue media downloads
   ↓
@@ -589,7 +597,14 @@ Receive 100 posts from API
          ↓
 Transform to database format
          ↓
-Batch INSERT using unnest:
+Batch INSERT raw data into ingested_posts:
+
+INSERT INTO ingested_posts (
+  platform, platform_post_id, post_data, ...
+)
+SELECT * FROM unnest(...)
+         ↓
+Batch INSERT/UPDATE normalized posts:
 
 INSERT INTO posts (
   account_id, platform, platform_post_id, text_content, ...
@@ -600,7 +615,6 @@ SELECT * FROM unnest(
 ON CONFLICT (platform, platform_post_id)
 DO UPDATE SET
   text_content = EXCLUDED.text_content,
-  engagement_stats = EXCLUDED.engagement_stats,
   updated_at = NOW()
          ↓
 RETURNING id, platform_post_id
@@ -706,25 +720,33 @@ BEGIN TRANSACTION;
 All sync operations designed to be idempotent:
 
 ```
-UPSERT pattern:
+UPSERT pattern for posts:
   ↓
 INSERT INTO posts (...)
 VALUES (...)
 ON CONFLICT (platform, platform_post_id)
 DO UPDATE SET
   text_content = EXCLUDED.text_content,
-  engagement_stats = EXCLUDED.engagement_stats,
   updated_at_platform = EXCLUDED.updated_at_platform,
   updated_at = NOW()
 WHERE
   posts.updated_at_platform < EXCLUDED.updated_at_platform
-  OR posts.engagement_stats != EXCLUDED.engagement_stats
+
+UPSERT pattern for ingested_posts (preserves raw data):
+  ↓
+INSERT INTO ingested_posts (...)
+VALUES (...)
+ON CONFLICT (platform, platform_post_id)
+DO UPDATE SET
+  post_data = EXCLUDED.post_data,
+  updated_at = NOW()
 ```
 
 This ensures:
 - Running sync multiple times doesn't create duplicates
 - Only updates if data actually changed
 - Safe to retry failed operations
+- Raw platform data always preserved in ingested_posts
 
 ---
 

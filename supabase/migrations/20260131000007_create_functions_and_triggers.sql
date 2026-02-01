@@ -10,15 +10,26 @@ END
 $$ LANGUAGE plpgsql
 
 -- Function: Update search vector for full-text search
+-- Queries ingested_posts for platform-specific fields (author_handle, activity_type)
 CREATE OR REPLACE FUNCTION update_search_vector()
 RETURNS TRIGGER AS $$
+DECLARE
+  post_data JSONB;
 BEGIN
+  -- Look up the raw post data from ingested_posts
+  SELECT ip.post_data INTO post_data
+  FROM ingested_posts ip
+  WHERE ip.platform = NEW.platform
+    AND ip.platform_post_id = NEW.platform_post_id
+  ORDER BY ip.created_at DESC
+  LIMIT 1;
+
   NEW.search_vector = to_tsvector('english',
     COALESCE(NEW.text_content, '') || ' ' ||
-    COALESCE(NEW.metadata->>'author_handle', '') || ' ' ||
-    COALESCE(NEW.metadata->>'activity_type', '')
-  )
-  RETURN NEW
+    COALESCE(post_data->>'author_handle', '') || ' ' ||
+    COALESCE(post_data->>'activity_type', '')
+  );
+  RETURN NEW;
 END
 $$ LANGUAGE plpgsql
 
@@ -82,7 +93,7 @@ CREATE TRIGGER update_posts_updated_at
   FOR EACH ROW EXECUTE FUNCTION update_updated_at()
 
 CREATE TRIGGER update_posts_search_vector
-  BEFORE INSERT OR UPDATE OF text_content, metadata ON posts
+  BEFORE INSERT OR UPDATE OF text_content ON posts
   FOR EACH ROW EXECUTE FUNCTION update_search_vector()
 
 CREATE TRIGGER denormalize_posts_user_id

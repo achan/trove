@@ -75,7 +75,7 @@ GET /api/posts
 | `limit` | integer | No | 20 | Number of results (max 100) |
 | `offset` | integer | No | 0 | Pagination offset |
 | `include_media` | boolean | No | true | Include media assets in response |
-| `include_engagement` | boolean | No | false | Include engagement stats |
+| `include_engagement` | boolean | No | false | Include engagement stats (from ingested_posts) |
 | `sort` | string | No | `desc` | Sort order: `asc` or `desc` |
 | `search` | string | No | - | Full-text search in content |
 
@@ -118,6 +118,7 @@ Authorization: Bearer {token}
         "author_handle": "@username",
         "permalink": "https://bsky.app/profile/..."
       }
+      // Note: engagement and metadata sourced from ingested_posts.post_data via JOIN
     }
   ],
   "pagination": {

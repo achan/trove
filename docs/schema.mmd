@@ -3,13 +3,13 @@ erDiagram
     users ||--o{ posts : "has many"
     users ||--o{ media_assets : "has many"
     users ||--o{ sync_logs : "has many"
-    users ||--o{ ingestion_queue : "has many"
-    users ||--o{ post_queue : "has many"
+    users ||--o{ ingested_items : "has many"
+    users ||--o{ ingested_posts : "has many"
     connected_accounts ||--o{ posts : "has many"
     connected_accounts ||--o{ sync_logs : "has many"
-    connected_accounts ||--o{ ingestion_queue : "has many"
-    connected_accounts ||--o{ post_queue : "has many"
-    ingestion_queue ||--o{ post_queue : "has many"
+    connected_accounts ||--o{ ingested_items : "has many"
+    connected_accounts ||--o{ ingested_posts : "has many"
+    ingested_items ||--o{ ingested_posts : "has many"
     posts ||--o{ media_assets : "has many"
 
     users {
@@ -48,8 +48,6 @@ erDiagram
         timestamptz updated_at_platform
         boolean published
         boolean deleted_on_platform
-        jsonb engagement_stats
-        jsonb metadata
         tsvector search_vector
         timestamptz created_at
         timestamptz updated_at
@@ -104,7 +102,7 @@ erDiagram
         timestamptz created_at
     }
 
-    ingestion_queue {
+    ingested_items {
         uuid id PK
         ingestion_source_enum source
         platform_enum platform
@@ -113,7 +111,7 @@ erDiagram
         text event_type
         text external_id
         jsonb payload
-        queue_status_enum status
+        processing_status_enum status
         integer attempts
         timestamptz received_at
         timestamptz started_at
@@ -125,15 +123,15 @@ erDiagram
         timestamptz updated_at
     }
 
-    post_queue {
+    ingested_posts {
         uuid id PK
-        uuid ingestion_queue_id FK "nullable"
+        uuid ingested_item_id FK "nullable"
         platform_enum platform
         uuid account_id FK "nullable"
         uuid user_id FK "nullable"
         text platform_post_id
         jsonb post_data
-        queue_status_enum status
+        processing_status_enum status
         integer attempts
         timestamptz received_at
         timestamptz started_at

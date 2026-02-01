@@ -22,18 +22,8 @@ CREATE TABLE posts (
   published BOOLEAN DEFAULT TRUE,
   deleted_on_platform BOOLEAN DEFAULT FALSE,
 
-  -- Engagement (snapshot at time of sync)
-  engagement_stats JSONB DEFAULT '{}',
-  -- Example: {"likes": 42, "comments": 5, "shares": 2, "views": 1000}
-
-  -- Platform-specific metadata
-  metadata JSONB DEFAULT '{}',
-  -- Bluesky: {author_did, author_handle, uri, reply_parent, reply_root}
-  -- Strava: {activity_type, sport_type, distance, duration, elevation, stats}
-  -- Instagram: {permalink, product_type, is_carousel}
-
   -- Search
-  search_vector TSVECTOR, -- Full-text search
+  search_vector TSVECTOR, -- Full-text search (populated from ingested_posts.post_data)
 
   -- Timestamps
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -49,6 +39,4 @@ CREATE INDEX idx_posts_user_id ON posts(user_id)
 CREATE INDEX idx_posts_user_created ON posts(user_id, created_at_platform DESC)
 CREATE INDEX idx_posts_user_platform_created ON posts(user_id, platform, created_at_platform DESC)
 CREATE INDEX idx_posts_deleted ON posts(deleted_on_platform)
-CREATE INDEX idx_posts_engagement_stats ON posts USING GIN(engagement_stats)
-CREATE INDEX idx_posts_metadata ON posts USING GIN(metadata)
 CREATE INDEX idx_posts_search_vector ON posts USING GIN(search_vector)

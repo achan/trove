@@ -8,24 +8,25 @@ your archived data.
 
 ## Core Architecture Principles
 
-### 1. Queue-Based Processing
-All incoming data flows through a two-queue architecture that decouples ingestion from processing:
+### 1. Two-Stage Ingestion Architecture
+All incoming data flows through a two-stage ingestion architecture that decouples raw data capture from processing:
 
 ```
-External Platform → ingestion_queue → post_queue → Database (posts, media_assets)
+External Platform → ingested_items → ingested_posts → Database (posts, media_assets)
 ```
 
 **Benefits:**
 - Fast webhook responses (no processing during ingestion)
 - Granular retry logic
-- Complete audit trail
+- Complete audit trail with permanent raw data storage
 - Ability to reprocess at any level
+- Platform-specific data preserved in original format
 
 ### 2. Platform-Agnostic Storage
 Data is stored in a normalized schema with platform-specific details in JSONB columns:
 - `connected_accounts.platform_profile` - Profile info
 - `connected_accounts.connection` - Auth & webhook details
-- `posts.metadata` - Platform-specific post data
+- `ingested_posts.post_data` - Raw platform-specific post data (permanent archive)
 - `media_assets.metadata` - Platform-specific media data
 
 ### 3. Multi-Tenant Isolation
@@ -43,16 +44,16 @@ service role bypassing RLS for background processing.
 - **media_assets** - Downloaded media files
 - **sync_logs** - Sync operation audit trail
 
-#### Queue Tables
-- **ingestion_queue** - Raw webhook/fetch payloads
-- **post_queue** - Individual posts extracted for processing
+#### Ingestion Tables
+- **ingested_items** - Raw webhook/fetch payloads (permanent archive)
+- **ingested_posts** - Individual posts with raw platform data (permanent archive)
 
 See [schema.mmd](schema.mmd) for visual diagram.
 
-### Queue Processing Architecture
+### Ingestion Architecture
 
-#### Ingestion Queue
-**Purpose:** Receive and store raw data from platforms
+#### Ingested Items
+**Purpose:** Receive and permanently store raw data from platforms
 
 **Sources:**
 - `webhook` - Real-time platform webhooks (Strava)
@@ -62,35 +63,41 @@ See [schema.mmd](schema.mmd) for visual diagram.
 
 **Processing:**
 1. Webhook/fetch arrives
-2. Insert raw payload into `ingestion_queue`
+2. Insert raw payload into `ingested_items`
 3. Return success immediately
 4. Background worker picks up pending items
 5. Extract individual posts from payload
-6. Create entries in `post_queue`
-7. Mark ingestion as completed
+6. Create entries in `ingested_posts`
+7. Mark item as completed
 
 **Fields:**
 - `payload` - Complete raw response from platform
 - `event_type` - Application-defined event classification
 - `external_id` - Platform's webhook/event ID (for deduplication)
 
-#### Post Queue
-**Purpose:** Process individual posts one at a time
+#### Ingested Posts
+**Purpose:** Process individual posts and preserve raw platform data
 
 **Processing:**
 1. Worker picks up pending post
 2. Parse `post_data` JSONB
-3. Create/update `posts` record
+3. Create/update `posts` record (normalized fields only)
 4. Queue media downloads in `media_assets`
 5. Mark post as completed
 
 **Fields:**
-- `ingestion_queue_id` - FK to source ingestion (audit trail)
+- `ingested_item_id` - FK to source item (audit trail)
 - `platform_post_id` - Platform's unique post ID
-- `post_data` - Normalized post structure in JSONB
+- `post_data` - Raw post data in platform's native format (permanent archive)
+
+**Retention:**
+Both tables are retained permanently:
+- Serves as audit trail and raw data archive
+- Enables reprocessing with updated normalization logic
+- Platform-specific fields (engagement, metadata) queried via JOIN
 
 **Retry Logic:**
-Both queues use the same retry pattern:
+Both tables use the same retry pattern:
 - Hardcoded 3 attempts
 - After 3 failures → status = `dead_letter`
 - Dead letter items require manual investigation
@@ -208,19 +215,19 @@ ORDER BY last_sync_at NULLS FIRST
 ### Webhook Flow (Strava Activity)
 ```
 1. Strava sends webhook: "new activity created"
-2. Webhook endpoint inserts to ingestion_queue
+2. Webhook endpoint inserts to ingested_items
    - source: 'webhook'
    - event_type: 'activity.create'
    - payload: {full webhook body}
 3. Return 200 OK immediately
 4. Ingestion worker processes:
    - Extracts activity data
-   - Creates post_queue entry
-   - Marks ingestion complete
+   - Creates ingested_posts entry (preserves raw post_data)
+   - Marks item complete
 5. Post worker processes:
-   - Creates posts record
+   - Creates posts record (normalized fields)
    - Creates media_assets records for photos
-   - Marks post_queue complete
+   - Marks ingested_posts complete
 6. Media download worker:
    - Downloads each photo
    - Updates media_assets records
@@ -230,14 +237,14 @@ ORDER BY last_sync_at NULLS FIRST
 ```
 1. Scheduler identifies account needs sync
 2. Fetch worker calls Instagram API
-3. Inserts to ingestion_queue
+3. Inserts to ingested_items
    - source: 'fetch'
    - event_type: 'posts.fetch'
    - payload: {API response with 50 posts}
 4. Ingestion worker processes:
    - Iterates through 50 posts
-   - Creates 50 post_queue entries
-   - Marks ingestion complete
+   - Creates 50 ingested_posts entries
+   - Marks item complete
 5. Post workers process each post in parallel
 6. Media workers download all media
 ```
@@ -247,10 +254,10 @@ ORDER BY last_sync_at NULLS FIRST
 1. User connects Instagram account
 2. Backfill job created
 3. Paginate through all historical posts
-4. Each API page → ingestion_queue entry
+4. Each API page → ingested_items entry
    - source: 'backfill'
-   - Cursor stored in metadata
-5. Process as normal through post_queue
+   - Cursor stored in payload
+5. Process as normal through ingested_posts
 6. Continue until all historical data fetched
 ```
 
@@ -322,11 +329,11 @@ media/
 - Identify problematic accounts
 - Performance metrics
 
-### Queue Metrics
-- Pending queue depth
+### Ingestion Metrics
+- Pending items depth
 - Processing rate
 - Error rate by platform
-- Dead letter queue size
+- Dead letter count
 
 ### Error Handling
 - Automatic retries (3 attempts)
