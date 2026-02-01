@@ -89,10 +89,15 @@ bun.lockb
 credentials.json
 service-account.json
 
-# Database dumps
-*.sql
+# Database dumps (but not migrations)
 *.sqlite
 *.db
+# Ignore SQL dumps but allow migration files
+*.sql
+!supabase/migrations/*.sql
+
+# Sprint tracking (local only)
+current_sprint.md
 
 # Misc
 .turbo/

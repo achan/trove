@@ -1,0 +1,146 @@
+erDiagram
+    users ||--o{ connected_accounts : "has many"
+    users ||--o{ posts : "has many"
+    users ||--o{ media_assets : "has many"
+    users ||--o{ sync_logs : "has many"
+    users ||--o{ ingestion_queue : "has many"
+    users ||--o{ post_queue : "has many"
+    connected_accounts ||--o{ posts : "has many"
+    connected_accounts ||--o{ sync_logs : "has many"
+    connected_accounts ||--o{ ingestion_queue : "has many"
+    connected_accounts ||--o{ post_queue : "has many"
+    ingestion_queue ||--o{ post_queue : "has many"
+    posts ||--o{ media_assets : "has many"
+
+    users {
+        uuid id PK
+        text email UK
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    connected_accounts {
+        uuid id PK
+        uuid user_id FK
+        platform_enum platform
+        text platform_user_id
+        jsonb platform_profile
+        jsonb connection
+        timestamptz last_sync_at
+        boolean sync_enabled
+        account_status_enum status
+        text error_message
+        integer error_count
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    posts {
+        uuid id PK
+        uuid account_id FK
+        uuid user_id FK
+        platform_enum platform
+        text platform_post_id UK
+        content_type_enum content_type
+        text text_content
+        text html_content
+        timestamptz created_at_platform
+        timestamptz updated_at_platform
+        boolean published
+        boolean deleted_on_platform
+        jsonb engagement_stats
+        jsonb metadata
+        tsvector search_vector
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    media_assets {
+        uuid id PK
+        uuid post_id FK
+        uuid user_id FK
+        media_type_enum media_type
+        text original_url
+        text storage_path
+        text storage_bucket
+        integer width
+        integer height
+        integer duration
+        decimal aspect_ratio
+        bigint file_size
+        text mime_type
+        text file_extension
+        text alt_text
+        text caption
+        integer position
+        download_status_enum download_status
+        integer download_attempts
+        timestamptz last_download_attempt
+        text download_error
+        text content_hash
+        jsonb metadata
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    sync_logs {
+        uuid id PK
+        uuid account_id FK
+        uuid user_id FK
+        sync_type_enum sync_type
+        sync_status_enum status
+        integer posts_fetched
+        integer posts_created
+        integer posts_updated
+        integer posts_deleted
+        integer media_downloaded
+        integer media_failed
+        text error_message
+        jsonb error_details
+        timestamptz started_at
+        timestamptz completed_at
+        integer duration_ms
+        jsonb metadata
+        timestamptz created_at
+    }
+
+    ingestion_queue {
+        uuid id PK
+        ingestion_source_enum source
+        platform_enum platform
+        uuid account_id FK
+        uuid user_id FK
+        text event_type
+        text external_id
+        jsonb payload
+        queue_status_enum status
+        integer attempts
+        timestamptz received_at
+        timestamptz started_at
+        timestamptz completed_at
+        text error_message
+        jsonb error_details
+        timestamptz last_error_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    post_queue {
+        uuid id PK
+        uuid ingestion_queue_id FK
+        platform_enum platform
+        uuid account_id FK
+        uuid user_id FK
+        text platform_post_id
+        jsonb post_data
+        queue_status_enum status
+        integer attempts
+        timestamptz received_at
+        timestamptz started_at
+        timestamptz completed_at
+        text error_message
+        jsonb error_details
+        timestamptz last_error_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
